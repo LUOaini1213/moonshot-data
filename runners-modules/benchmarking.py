@@ -40,8 +40,8 @@ class Benchmarking:
     """
 
     sql_read_runner_cache_record = """
-        SELECT * from runner_cache_table WHERE connection_id=? AND recipe_id=?
-        AND dataset_id=? AND prompt_template_id=? AND prompt=?
+        SELECT predicted_results,duration from runner_cache_table WHERE connection_id=? AND recipe_id=?
+        AND dataset_id=? AND prompt_template_id=? AND prompt=? AND COALESCE(system_prompt,'')=?
     """
     BATCH_SIZE = 10
     QUEUE_SIZE = 10
@@ -888,6 +888,7 @@ class Benchmarking:
                     new_prompt_info.ds_id,
                     new_prompt_info.pt_id,
                     new_prompt_info.connector_prompt.prompt,
+                    new_prompt_info.system_prompt,
                 ),
                 Benchmarking.sql_read_runner_cache_record,
             )
@@ -920,8 +921,17 @@ class Benchmarking:
                 )
                 return None
         else:
-            # Load result from cache
-            new_prompt_info = PromptArguments.from_tuple(cache_record)
+            # Cache model output, not dataset labels or this run's provenance.
+            # Selection seed, row index, target and attack ID are current metadata;
+            # the cache key includes the rendered user and system prompts.
+            current_prompt = new_prompt_info.connector_prompt
+            new_prompt_info.connector_prompt = ConnectorPromptArguments(
+                prompt_index=current_prompt.prompt_index,
+                prompt=current_prompt.prompt,
+                target=current_prompt.target,
+                predicted_results=ConnectorResponse(**json.loads(cache_record[0])),
+                duration=float(cache_record[1]),
+            )
 
         # Return result
         return new_prompt_info
