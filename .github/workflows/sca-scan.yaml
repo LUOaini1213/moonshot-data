@@ -21,6 +21,9 @@ concurrency:
 jobs:
   software-composition-analysis:
 
+    # This service and its credentials belong to upstream, not third-party forks.
+    if: github.repository == 'aiverify-foundation/moonshot-data'
+
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

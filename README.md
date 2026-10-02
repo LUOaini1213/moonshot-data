@@ -9,6 +9,28 @@ This repository contains the test assets needed for [Project Moonshot](https://g
 
 </div>
 
+## Offline regression checks in this fork
+
+This fork retains the six-file Singapore dataset contribution in
+[upstream PR #223](https://github.com/aiverify-foundation/moonshot-data/pull/223).
+Additional scoring and runner-cache fixes are separate commits; the upstream
+contribution branch is unchanged.
+
+Run the regression suite with Python 3.11 in a virtual environment:
+
+```bash
+python -m pip install -r requirements-review.txt
+python -m pytest tests -q --junitxml=artifacts/tests.xml
+```
+
+These tests use the real Moonshot 0.7.6 interfaces, runner pipeline and SQLite
+asset, with an offline counted connector instead of a model service. They cover
+exact numeric GSM8K scoring, complete metric batches, current labels and system
+prompts during cache reuse, and the existing Singapore option/key corrections.
+The fork's CI runs on pushes and pull requests without API keys. This does not
+run every optional provider, GPU metric or upstream integration smoke test.
+See [the contracts and review boundaries](docs/offline-regressions.md).
+
 ## 🎯 Motivation
 
 Developed by the [AI Verify Foundation](https://aiverifyfoundation.sg/), [Moonshot](https://aiverifyfoundation.sg/project-moonshot/) is one of the first tools to bring Benchmarking and Red-Teaming together to help AI developers, compliance teams and AI system owners <b>evaluate LLMs and LLM-based AI systems</b>.
