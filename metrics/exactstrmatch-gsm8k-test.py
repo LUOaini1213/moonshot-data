@@ -1,5 +1,6 @@
 import re
 import string
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal
 
@@ -7,13 +8,45 @@ from moonshot.src.metrics.metric_interface import MetricInterface
 from moonshot.src.utils.timeit import timeit
 
 
+_NUMBER = re.compile(
+    r"[+-]?(?:(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]+)?|\.[0-9]+)"
+    r"(?:[eE][+-]?[0-9]+)?"
+)
+_ANSWER = re.compile(r"\bThe answer is\b")
+
+
+def _numeric_token(value: str) -> str | None:
+    """A complete ASCII number, optionally currency-prefixed and sentence-ended.
+
+    Supports signed integers/decimals, groups of three comma-separated digits,
+    and scientific notation. One trailing sentence period is allowed. Adjacent
+    units, fractions, malformed separators and nonfinite values are rejected.
+    """
+    token = value.strip()
+    if token.startswith(("$", "£", "€")):
+        token = token[1:]
+    if token.endswith("."):
+        token = token[:-1]
+    return token.replace(",", "") if _NUMBER.fullmatch(token) else None
+
+
+def _number(value: str) -> Decimal | None:
+    token = _numeric_token(value)
+    if token is None:
+        return None
+    try:
+        # String construction is exact; float conversion or normalize() could round.
+        return Decimal(token)
+    except InvalidOperation:
+        return None
+
+
 class ExactStrMatchGSM8k(MetricInterface):
     def __init__(self):
         self.id = Path(__file__).stem
         self.name = "ExactStrMatchGSM8k"
         self.description = (
-            "ExactStrMatch will compare the output from language model with a single target"
-            " or multiple expected target."
+            "Compares each GSM8K final answer with its target using exact decimal values."
         )
         self.metric_config = self.get_metrics_configuration(self.id)
         self.endpoints = self.metric_config.get("endpoints", [])
@@ -43,12 +76,12 @@ class ExactStrMatchGSM8k(MetricInterface):
         Asynchronously calculates the accuracy of the predicted results by comparing them to the target results.
 
         This method evaluates each predicted result against the corresponding target(s) to determine if it is correct.
-        It supports both single and multiple target values for comparison.
+        Each prediction has one complete numeric target value.
 
         Args:
             prompts (Any): The prompts used for prediction.
             predicted_results (Any): The predicted results, each containing a response attribute.
-            targets (Any): The target results, which can be a single value or a list of values.
+            targets (Any): A non-empty batch of target values aligned with prompts and predictions.
             *args: Additional positional arguments.
             **kwargs: Additional keyword arguments.
 
@@ -64,6 +97,14 @@ class ExactStrMatchGSM8k(MetricInterface):
                         - matched (bool): Whether the predicted value matches the target.
                 - grading_criteria (dict): Contains the accuracy for grading purposes.
         """
+        try:
+            lengths = [len(batch) for batch in (prompts, predicted_results, targets)]
+        except TypeError as exc:
+            raise ValueError("prompts, predicted_results and targets must be non-empty batches of the same length") from exc
+        if (any(isinstance(batch, (str, bytes)) for batch in (prompts, predicted_results, targets))
+                or not lengths[0] or len(set(lengths)) != 1):
+            raise ValueError("prompts, predicted_results and targets must be non-empty batches of the same length")
+
         correct = 0
         total = len(predicted_results)
         results = []
@@ -104,7 +145,12 @@ class ExactStrMatchGSM8k(MetricInterface):
     @staticmethod
     def extract(result: str) -> str:
         """
-        Extracts a numerical value from a string if present.
+        Extracts the first complete token after the last explicit answer marker.
+
+        The marker is the template's case-sensitive ``The answer is``. A final
+        malformed/empty answer does not fall back to an earlier valid answer.
+        Whitespace-separated prose may follow the number; attached units or
+        malformed numeric tokens are not truncated into apparently valid values.
 
         Args:
             result (str): The string to extract the value from.
@@ -112,13 +158,17 @@ class ExactStrMatchGSM8k(MetricInterface):
         Returns:
             str: The extracted numerical value as a string, or 'NA' if no value is found.
         """
-        matches = re.findall(r"The answer is \$?(\-?[\d,\.]+)", result)
-        if len(matches) == 0:
+        matches = list(_ANSWER.finditer(result))
+        if not matches:
             return "NA"
-        model_answer = matches[-1].replace(",", "")
-        if model_answer[-1] == ".":
-            model_answer = model_answer[:-1]
-        return model_answer
+        remainder = result[matches[-1].end():]
+        if remainder and not remainder[0].isspace():
+            return "NA"
+        words = remainder.split()
+        if not words:
+            return "NA"
+        token = _numeric_token(words[0])
+        return token if token is not None and _number(token) is not None else "NA"
 
 
 def first_number_normalized(words: list[str]) -> str:
@@ -152,20 +202,17 @@ def strip_punctuation(s: str) -> str:
 
 def normalize_number(number: str, precision: int = 5) -> str:
     """
-    Normalizes a number to a specified precision.
+    Parses a complete number without rounding any significant digits.
 
     Args:
         number (str): The number to normalize.
-        precision (int, optional): The number of significant figures to keep. Defaults to 5.
+        precision (int, optional): Retained for call compatibility; no rounding is performed.
 
     Returns:
         str: The normalized number as a string.
     """
-    if number.replace(".", "").isnumeric():
-        num = float(number)
-        return format(num, f".{precision}g")
-    else:
-        return number
+    parsed = _number(number)
+    return str(parsed) if parsed is not None else number
 
 
 def strip_numeric_punctuation(s: str) -> str:
@@ -212,6 +259,12 @@ def inspect_match_str(
     v = value.strip()
     t = target.strip()
 
+    if numeric:
+        # Location controls apply to text only. Numeric scoring always compares
+        # the complete values, including sign and every significant digit.
+        predicted, expected = _number(v), _number(t)
+        return (normalize_number(v), predicted is not None and expected is not None and predicted == expected)
+
     # baseline answer (will only change for numeric)
     answer = v
 
@@ -219,23 +272,7 @@ def inspect_match_str(
     if ignore_case:
         v = v.casefold()
         t = t.casefold()
-    if numeric:
-        # remove punctuation
-        v = strip_numeric_punctuation(v)
-        t = strip_numeric_punctuation(t)
-        # normalize as required
-        t = normalize_number(t)
-        if location == "begin":
-            words = v.split(" ")
-            v = first_number_normalized(words)
-        elif location == "end":
-            words = v.split(" ")
-            words.reverse()
-            v = first_number_normalized(words)
-        elif location == "exact":
-            v = normalize_number(v)
-        answer = v
-    elif ignore_punctuation:
+    if ignore_punctuation:
         v = strip_punctuation(v)
         t = strip_punctuation(t)
 

@@ -61,6 +61,13 @@ class ExactStrMatch(MetricInterface):
                         target, and predicted result.
                 - grading_criteria (dict): Contains the accuracy for grading purposes.
         """
+        try:
+            lengths = [len(batch) for batch in (prompts, predicted_results, targets)]
+        except TypeError as exc:
+            raise ValueError("prompts, predictions and targets must be non-empty and have the same length") from exc
+        if (any(isinstance(batch, (str, bytes)) for batch in (prompts, predicted_results, targets))
+                or not lengths[0] or len(set(lengths)) != 1):
+            raise ValueError("prompts, predictions and targets must be non-empty and have the same length")
         predicted_values = [result.response for result in predicted_results]
 
         correct = 0

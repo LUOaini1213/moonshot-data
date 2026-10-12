@@ -1,0 +1,37 @@
+name: Offline regressions
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      MS_LOG_TO_FILE: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-review.txt
+      - run: pip install -r requirements-review.txt
+      - name: Actual framework and asset regressions
+        run: python -m pytest tests -q --junitxml=artifacts/tests.xml
+      - name: Record tested runtime and source
+        run: |
+          git rev-parse HEAD > artifacts/commit.txt
+          python --version > artifacts/python.txt
+          pip freeze > artifacts/requirements.txt
+          git diff --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: offline-regressions
+          path: artifacts/
