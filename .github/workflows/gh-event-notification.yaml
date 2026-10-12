@@ -9,6 +9,8 @@ on:
 
 jobs:
   notify:
+    # This workflow's sole destination is the upstream Slack channel.
+    if: github.repository == 'aiverify-foundation/moonshot-data'
     runs-on: ubuntu-latest
 
     steps:

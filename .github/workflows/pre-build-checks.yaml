@@ -122,7 +122,8 @@ jobs:
 
       # Send slack notification
       - name: Send slack notification
-        if: ${{ ! cancelled() }}
+        # The upstream webhook is not a fork service.
+        if: ${{ ! cancelled() && github.repository == 'aiverify-foundation/moonshot-data' }}
         uses: slackapi/slack-github-action@v1.26.0
         with:
           payload: |
